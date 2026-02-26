@@ -359,9 +359,9 @@ if __name__ == "__main__":
     parser.add_argument("--nMics", type=int, default=4)
     parser.add_argument("--environmentSize", type=float, default=30.0)
     parser.add_argument("--nSources", type=int, default=4)
-    parser.add_argument("--noisePower", type=float, default=60.0)
+    parser.add_argument("--noisePower", type=float, default=40.0)
     parser.add_argument("--sourcePower", type=float, default=80.0)
-    parser.add_argument("--seed", type=int, default=123)
+    parser.add_argument("--seed", type=int, default=42)
 
     # Sub-band / history
     parser.add_argument("--Omega_size", type=int, default=800)         # Hz
