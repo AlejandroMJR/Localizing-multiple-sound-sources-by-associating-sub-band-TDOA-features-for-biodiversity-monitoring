@@ -1,0 +1,90 @@
+\documentclass{standalone}
+\usepackage[utf8]{inputenc}
+\usepackage{pgfplots}
+\DeclareUnicodeCharacter{2212}{-}
+\usepgfplotslibrary{groupplots,dateplot}
+\usetikzlibrary{patterns,shapes.arrows}
+\pgfplotsset{compat=newest}
+\begin{document}
+% This file was created with matplot2tikz v0.5.3.
+\begin{tikzpicture}
+
+\definecolor{crimson2143940}{RGB}{214,39,40}
+\definecolor{darkgray176}{RGB}{176,176,176}
+\definecolor{lightgray204}{RGB}{204,204,204}
+\definecolor{steelblue31119180}{RGB}{31,119,180}
+
+\begin{axis}[
+legend cell align={left},
+legend style={
+  fill opacity=0.8,
+  draw opacity=1,
+  text opacity=1,
+  at={(0.03,0.97)},
+  anchor=north west,
+  draw=lightgray204
+},
+minor xtick={},
+minor ytick={},
+tick align=outside,
+tick pos=left,
+x grid style={darkgray176},
+xlabel={Number of microphones},
+xmajorgrids,
+xmin=2.85, xmax=6.15,
+xtick style={color=black},
+xtick={2,3,4,5,6,7},
+y grid style={darkgray176},
+ylabel={RMSE (m)},
+ymajorgrids,
+ymin=0.089118490728106, ymax=0.97429377706873,
+ytick style={color=black},
+ytick={0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1}
+]
+\addplot [thick, steelblue31119180, mark=*, mark size=3, mark options={solid}, forget plot]
+table {%
+3 0.214737056628361
+4 0.176356828523178
+5 0.178374872593409
+6 0.129353731016316
+};
+\addplot [thick, steelblue31119180, dashed, mark=*, mark size=3, mark options={solid}, forget plot]
+table {%
+3 0.300754617696312
+4 0.191180207616062
+5 0.260863591845621
+6 0.184693469714039
+};
+\addplot [thick, steelblue31119180, dotted, mark=*, mark size=3, mark options={solid}, forget plot]
+table {%
+3 0.439211095928327
+4 0.317136771960397
+5 0.355409537977217
+6 0.573422127008531
+};
+\addplot [thick, crimson2143940, mark=*, mark size=3, mark options={solid}, forget plot]
+table {%
+3 0.625424679524867
+4 0.338620656410317
+5 0.381607771212388
+6 0.248011462609737
+};
+\addplot [thick, crimson2143940, dashed, mark=*, mark size=3, mark options={solid}, forget plot]
+table {%
+3 0.358589979373617
+4 0.329850200035133
+5 0.471222039451124
+6 0.550513216278378
+};
+\addplot [thick, crimson2143940, dotted, mark=*, mark size=3, mark options={solid}, forget plot]
+table {%
+3 0.702854033140585
+4 0.624615135881065
+5 0.93405853678052
+6 0.536675932910639
+};
+\end{axis}
+
+\end{tikzpicture}
+
+\end{document}

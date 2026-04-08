@@ -79,6 +79,72 @@ def attach_band_info_to_peaks_fast(tau_obs, bands, peak_taus, tol_tau):
 
     return peaks
 
+def attach_timefreq_info_to_peaks(
+    tau_obs,
+    bands,
+    frames,
+    peak_taus,
+    tol_tau,
+    n_bands=None,
+    n_frames=None,
+):
+    """
+    Old-format-compatible peak attachment.
+
+    Keeps the old keys:
+        - "tau"
+        - "bands"
+        - "band_counts"
+
+    Adds new keys:
+        - "frames"
+        - "tf_cells"
+        - "tf_support_map" (optional)
+        - "obs_idx"
+        - "n_support"
+    """
+    tau_obs = np.asarray(tau_obs)
+    bands = np.asarray(bands)
+    frames = np.asarray(frames)
+    peak_taus = np.asarray(peak_taus)
+
+    peaks = []
+
+    for k, tau_hat in enumerate(peak_taus):
+        mask = np.abs(tau_obs - tau_hat) <= tol_tau
+        idx = np.flatnonzero(mask)
+
+        peak_bands = bands[idx].copy()
+        peak_frames = frames[idx].copy()
+
+        band_counts = {}
+        if peak_bands.size > 0:
+            uniq_b, cnt_b = np.unique(peak_bands, return_counts=True)
+            band_counts = {int(b): int(c) for b, c in zip(uniq_b, cnt_b)}
+
+        peak_dict = {
+            "peak_idx": k,
+            "tau": float(tau_hat),          # keep OLD expected key
+            "bands": peak_bands,            # keep OLD expected key
+            "band_counts": band_counts,     # keep OLD expected key
+
+            # new TF info
+            "frames": peak_frames,
+            "obs_idx": idx,
+            "n_support": int(idx.size),
+            "tf_cells": np.stack([peak_bands, peak_frames], axis=1) if idx.size > 0 else np.zeros((0, 2), dtype=int),
+        }
+
+        if n_bands is not None and n_frames is not None:
+            tf_support_map = np.zeros((n_bands, n_frames), dtype=np.float32)
+            for b, t in peak_dict["tf_cells"]:
+                if 0 <= b < n_bands and 0 <= t < n_frames:
+                    tf_support_map[b, t] += 1.0
+            peak_dict["tf_support_map"] = tf_support_map
+
+        peaks.append(peak_dict)
+
+    return peaks
 
 def peak_band_vector(peak, n_bands):
     """

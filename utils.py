@@ -3,6 +3,7 @@ import glob
 import numpy as np
 import matplotlib.pyplot as plt
 from association import peak_band_vector
+from scipy.signal import stft
 
 # ============================================================
 # File / folder utilities
@@ -575,3 +576,336 @@ def plot_all_pairs_hyperbolas(
 
     ax.set_title("All hyperbolas from all pairs (all estimated TDOA peaks)")
     return ax
+
+def plot_reference_spectrogram(
+    signals,
+    fs,
+    mic_idx=0,
+    t_start=0.0,
+    t_end=None,
+    nperseg=1024,
+    noverlap=None,
+    nfft=None,
+    db_floor=80.0,
+    ax=None,
+    title=None,
+    cmap="gray_r",
+):
+    """
+    Plot a standard spectrogram for one recorder over a chosen time interval.
+
+    Parameters
+    ----------
+    signals : ndarray, shape (n_mics, n_samples)
+    fs : float
+    mic_idx : int
+        Recorder / microphone index to plot.
+    t_start, t_end : float
+        Time interval in seconds.
+    nperseg : int
+        STFT window length.
+    noverlap : int or None
+        Overlap between windows. If None, uses nperseg // 2.
+    nfft : int or None
+        FFT size. If None, uses nperseg.
+    db_floor : float
+        Dynamic range shown in dB below peak.
+    ax : matplotlib Axes or None
+    title : str or None
+    cmap : str
+
+    Returns
+    -------
+    fig, ax
+    """
+    x = np.asarray(signals[mic_idx], dtype=float)
+
+    if noverlap is None:
+        noverlap = nperseg // 2
+    if nfft is None:
+        nfft = nperseg
+
+    n_samples = len(x)
+
+    s0 = max(0, int(round(t_start * fs)))
+    s1 = n_samples if t_end is None else min(n_samples, int(round(t_end * fs)))
+
+    if s1 <= s0:
+        raise ValueError("Chosen interval is empty.")
+
+    x_seg = x[s0:s1]
+
+    freqs, times, Zxx = stft(
+        x_seg,
+        fs=fs,
+        nperseg=nperseg,
+        noverlap=noverlap,
+        nfft=nfft,
+        boundary=None,
+        padded=False,
+    )
+
+    S = np.abs(Zxx)
+    S_db = 20 * np.log10(S + 1e-12)
+    S_db -= S_db.max()
+    S_db = np.maximum(S_db, -db_floor)
+
+    times = times + t_start  # shift back to global time axis
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(14, 6))
+    else:
+        fig = ax.figure
+
+    ax.imshow(
+        S_db,
+        origin="lower",
+        aspect="auto",
+        extent=[times[0], times[-1], freqs[0], freqs[-1]],
+        cmap=cmap,
+    )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Frequency (Hz)")
+    ax.set_title(
+        title or f"Recorder {mic_idx} spectrogram (nperseg={nperseg}, nfft={nfft})"
+    )
+
+    return fig, ax
+
+
+def plot_highres_spectrogram_with_projected_clusters(
+    signals,
+    fs,
+    mic_idx,
+    cid2color,
+    projected_maps,
+    t_start=0.0,
+    t_end=None,
+    nperseg=1024,
+    noverlap=None,
+    nfft=None,
+    alpha=0.5,
+    db_floor=80.0,
+    title="High-resolution spectrogram with projected source regions",
+    cmap="gray_r",
+):
+    """
+    Plot a high-resolution spectrogram and overlay projected cluster colors.
+    """
+    x = np.asarray(signals[mic_idx], dtype=float)
+
+    if noverlap is None:
+        noverlap = nperseg // 2
+    if nfft is None:
+        nfft = nperseg
+
+    n_samples = len(x)
+    s0 = max(0, int(round(t_start * fs)))
+    s1 = n_samples if t_end is None else min(n_samples, int(round(t_end * fs)))
+
+    if s1 <= s0:
+        raise ValueError("Chosen interval is empty.")
+
+    x_seg = x[s0:s1]
+
+    freqs, times, Zxx = stft(
+        x_seg,
+        fs=fs,
+        nperseg=nperseg,
+        noverlap=noverlap,
+        nfft=nfft,
+        boundary=None,
+        padded=False,
+    )
+
+    S = np.abs(Zxx)
+    S_db = 20 * np.log10(S + 1e-12)
+    S_db -= S_db.max()
+    S_db = np.maximum(S_db, -db_floor)
+
+    times = times + t_start
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    ax.imshow(
+        S_db,
+        origin="lower",
+        aspect="auto",
+        extent=[times[0], times[-1], freqs[0], freqs[-1]],
+        cmap=cmap,
+    )
+
+    n_freq_vis, n_frames_vis = S_db.shape
+
+    for cid, freq_map in enumerate(projected_maps):
+        if freq_map.shape != (n_freq_vis, n_frames_vis):
+            raise ValueError(
+                f"Projected map for cluster {cid} has shape {freq_map.shape}, "
+                f"expected {(n_freq_vis, n_frames_vis)}"
+            )
+
+        if np.max(freq_map) <= 0:
+            continue
+
+        freq_map = freq_map / (np.max(freq_map) + 1e-12)
+
+        rgba = np.zeros((n_freq_vis, n_frames_vis, 4), dtype=float)
+        rgba[..., :3] = cid2color[cid][:3]
+        rgba[..., 3] = alpha * freq_map
+
+        ax.imshow(
+            rgba,
+            origin="lower",
+            aspect="auto",
+            extent=[times[0], times[-1], freqs[0], freqs[-1]],
+        )
+
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Frequency (Hz)")
+    ax.set_title(title)
+
+    return fig, ax, freqs, times, Zxx
+
+def project_source_maps_to_visual_grid(
+    source_maps,
+    Omega_list_alg,
+    fs,
+    nfft_alg,
+    hop_alg,
+    n_frames_alg,
+    nfft_vis,
+    hop_vis,
+    n_frames_vis,
+):
+    """
+    Project source maps from the algorithm TF grid to a high-resolution
+    visualization TF grid.
+
+    Parameters
+    ----------
+    source_maps : list of arrays
+        Each entry has shape (n_bands_alg, n_frames_alg).
+    Omega_list_alg : list
+        Algorithm band definition. Omega_list_alg[b] contains FFT-bin indices
+        in the algorithm STFT corresponding to band b.
+    fs : float
+        Sampling rate.
+    nfft_alg : int
+        FFT size of the algorithm STFT.
+    hop_alg : int
+        Hop size of the algorithm STFT.
+    n_frames_alg : int
+        Number of algorithm STFT frames.
+    nfft_vis : int
+        FFT size of the visualization STFT.
+    hop_vis : int
+        Hop size of the visualization STFT.
+    n_frames_vis : int
+        Number of visualization STFT frames.
+
+    Returns
+    -------
+    projected_maps : list of arrays
+        Each entry has shape (n_freq_vis, n_frames_vis).
+    """
+    n_freq_vis = nfft_vis // 2 + 1
+    projected_maps = []
+
+    # Frequencies of the algorithm FFT bins
+    freqs_alg = np.arange(nfft_alg // 2 + 1) * fs / nfft_alg
+    freqs_vis = np.arange(n_freq_vis) * fs / nfft_vis
+
+    # Times of the frame centers
+    times_alg = np.arange(n_frames_alg) * hop_alg / fs
+    times_vis = np.arange(n_frames_vis) * hop_vis / fs
+
+    # For each band, estimate its frequency span
+    band_ranges_hz = []
+    for Omega_idx in Omega_list_alg:
+        Omega_idx = np.asarray(Omega_idx, dtype=int)
+        if Omega_idx.size == 0:
+            band_ranges_hz.append((None, None))
+            continue
+        fmin = freqs_alg[Omega_idx.min()]
+        fmax = freqs_alg[Omega_idx.max()]
+        band_ranges_hz.append((fmin, fmax))
+
+    for band_map in source_maps:
+        n_bands_alg, _ = band_map.shape
+
+        # --------
+        # 1) time interpolation: (n_bands_alg, n_frames_alg) -> (n_bands_alg, n_frames_vis)
+        # --------
+        band_time_interp = np.zeros((n_bands_alg, n_frames_vis), dtype=float)
+
+        for b in range(n_bands_alg):
+            y = band_map[b]
+            if np.all(y == 0):
+                continue
+
+            band_time_interp[b] = np.interp(
+                times_vis,
+                times_alg,
+                y,
+                left=0.0,
+                right=0.0,
+            )
+
+        # --------
+        # 2) frequency expansion: band axis -> high-res FFT bins
+        # --------
+        freq_map_vis = np.zeros((n_freq_vis, n_frames_vis), dtype=float)
+
+        for b in range(n_bands_alg):
+            fmin, fmax = band_ranges_hz[b]
+            if fmin is None:
+                continue
+
+            freq_mask = (freqs_vis >= fmin) & (freqs_vis <= fmax)
+            if not np.any(freq_mask):
+                continue
+
+            freq_map_vis[freq_mask, :] = np.maximum(
+                freq_map_vis[freq_mask, :],
+                band_time_interp[b][None, :]
+            )
+
+        projected_maps.append(freq_map_vis)
+
+    return projected_maps
+
+def build_source_tf_maps(
+    sources,
+    tdoas_hat_pairs,
+    n_bands,
+    n_frames,
+):
+    """
+    Build TF support map per source cluster.
+    Returns list of (n_bands, n_frames) arrays.
+    """
+    source_maps = []
+
+    for src in sources:
+
+        tf_map = np.zeros((n_bands, n_frames), dtype=float)
+
+        for m in src["members"]:
+
+            pair = tuple(m["pair"])
+            peak_idx = int(m["peak_idx"])
+
+            peak = tdoas_hat_pairs[pair]["peaks"][peak_idx]
+
+            # tf_cells = [(band, frame), ...]
+            for b, t in peak.get("tf_cells", []):
+                tf_map[b, t] += 1
+
+        if tf_map.max() > 0:
+            tf_map /= tf_map.max()
+
+        source_maps.append(tf_map)
+
+    return source_maps
+

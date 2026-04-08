@@ -196,7 +196,8 @@ def simulation_setup_sparse_mics(nMics, nSources, environmentSize):
     #        [17.03175087, 17.86634109],
     #        [28.93543559, 19.59531291]])
     # micPos = np.array([[0.5,0.5],[environmentSize-0.5, 0.5], [environmentSize//2, environmentSize-0.5]])
-
+    # srcPos = np.array([[28, 15]])
+    # micPos = np.array([[0,environmentSize/2],[environmentSize, environmentSize/2]])
     return micPos, srcPos
 
 

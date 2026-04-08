@@ -12,6 +12,7 @@ from TDOA_extraction import (
 from association import (
     associate_tdoa_peaks_by_band_cosine_constrained,
     attach_band_info_to_peaks_fast,
+    attach_timefreq_info_to_peaks
 )
 from simulate_signals import _simulate
 from utils import (
@@ -23,6 +24,11 @@ from utils import (
     savefig,
     set_plot_style,
     clear_folder,
+    plot_reference_spectrogram,
+    plot_highres_spectrogram_with_projected_clusters,
+    build_cluster_color_map,
+    build_source_tf_maps,
+    project_source_maps_to_visual_grid,
 )
 from posEstimator import estimate_all_sources_positions
 from metrics import compute_position_errors
@@ -60,6 +66,34 @@ def main(args):
         sourcePower=args.sourcePower,
     )
 
+    # -----------------------------
+    # Plot reference spectrogram
+    # -----------------------------
+    signals = signals[:, :int(fs * args.historyTime)]
+
+    mic_ref = 0
+    nperseg_vis = 1024
+    noverlap_vis = nperseg_vis // 2
+    nfft_vis = nperseg_vis
+    if make_plots:
+        fig, ax = plot_reference_spectrogram(
+            signals=signals,
+            fs=fs,
+            mic_idx=mic_ref,
+            t_start=0.0,
+            t_end=args.historyTime,
+            nperseg=nperseg_vis,
+            noverlap=noverlap_vis,
+            nfft=nfft_vis,
+            title="Recorder 0 reference spectrogram (1024)",
+        )
+
+        savefig(fig, f"{fig_dir}/spectrogram_reference_1024",
+                save_pdf=True, save_png=False, close=not args.show_plots)
+
+        if args.show_plots:
+            plt.show()
+
     c = 343.0  # speed of sound [m/s]
 
     # -----------------------------
@@ -93,7 +127,8 @@ def main(args):
     # -----------------------------
     # STFT parameters
     # -----------------------------
-    frameSize = max(maxTDOA * 2, avgTDOA * 4)
+    # frameSize = max(maxTDOA * 2, avgTDOA * 4)
+    frameSize = maxTDOA * 2
     timeOverlap = frameSize // 2
     nfft = frameSize
     hop = frameSize - timeOverlap
@@ -202,13 +237,24 @@ def main(args):
             verbose=False,
         )
 
-        peaks = attach_band_info_to_peaks_fast(
+        # peaks = attach_band_info_to_peaks_fast(
+        #     tau_obs=tau_obs,
+        #     bands=bands,
+        #     peak_taus=peak_taus,
+        #     tol_tau=Qn // 2,
+        # )
+        
+        frames = np.asarray(obs_frame[p], dtype=np.int32)
+
+        peaks = attach_timefreq_info_to_peaks(
             tau_obs=tau_obs,
             bands=bands,
+            frames=frames,
             peak_taus=peak_taus,
             tol_tau=Qn // 2,
+            n_bands=n_bands,
+            n_frames=signalsSTFT.shape[-1],
         )
-
         tdoas_hat_pairs[(i, j)] = dict(
             peak_taus=peak_taus,   # MP peak locations (samples)
             peaks=peaks,
@@ -268,6 +314,72 @@ def main(args):
         min_tdoas_per_source=args.min_tdoas_per_source,
         max_sources=max_sources_mp,
     )
+
+    # -----------------------------
+    # Optional: Create projected source region maps for visualization
+    # (not used for localization, just to visualize where the associated sources "live" in the TF space)
+    # -----------------------------
+
+
+    if make_plots and args.plot_projected_clusters:
+        cid2color = build_cluster_color_map(sources)
+
+        source_maps = build_source_tf_maps(
+            sources,
+            tdoas_hat_pairs,
+            n_bands,
+            signalsSTFT.shape[-1],
+        )
+
+        hop_vis = nperseg_vis - noverlap_vis
+        t_start = 0.0
+        t_end = signals.shape[1] / fs
+
+        _, times_vis_tmp, _ = stft(
+            signals[0],
+            fs=fs,
+            nperseg=nperseg_vis,
+            noverlap=noverlap_vis,
+            nfft=nfft_vis,
+            boundary=None,
+            padded=False,
+        )
+
+        n_frames_vis = len(times_vis_tmp)
+
+        projected_maps = project_source_maps_to_visual_grid(
+            source_maps=source_maps,
+            Omega_list_alg=Omega_list,
+            fs=fs,
+            nfft_alg=nfft,
+            hop_alg=hop,
+            n_frames_alg=signalsSTFT.shape[-1],
+            nfft_vis=nfft_vis,
+            hop_vis=hop_vis,
+            n_frames_vis=n_frames_vis,
+        )
+
+        fig, ax, _, _, _ = plot_highres_spectrogram_with_projected_clusters(
+            signals=signals,
+            fs=fs,
+            mic_idx=mic_ref,
+            cid2color=cid2color,
+            projected_maps=projected_maps,
+            t_start=t_start,
+            t_end=t_end,
+            nperseg=nperseg_vis,
+            noverlap=noverlap_vis,
+            nfft=nfft_vis,
+            alpha=0.45,
+            cmap="gray_r",
+            title="Recorder 0 spectrogram with projected source regions",
+        )
+
+        savefig(fig, f"{fig_dir}/spectrogram_highres_projected_clusters",
+                save_pdf=True, save_png=False, close=not args.show_plots)
+
+        if args.show_plots:
+            plt.show()
 
     # -----------------------------
     # Optional: 3-pair feature histogram visualization
@@ -382,6 +494,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--save_pair_histograms", type=int, default=1)
     parser.add_argument("--plot_all_hyperbolas", type=int, default=1)
+    parser.add_argument("--plot_projected_clusters", type=int, default=1)
     parser.add_argument("--plot_three_pair_bands", type=int, default=1)
     parser.add_argument("--plot_final_overlay", type=int, default=1)
 

@@ -2,8 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 import pandas as pd
-#import tikzplotlib
-
+# import matplot2tikz
 # -----------------------------
 def _make_noise_color_map(df, cmap_name="tab10"):
     noises = sorted(df["noisePower"].unique())
@@ -62,6 +61,7 @@ def plot_rmse_vs_nodes_multi_sources(df, fixed_sources=(3, 4, 5)):
     ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     plt.tight_layout()
     plt.savefig("Results/rmse_vs_nMics.pdf",  bbox_inches="tight", pad_inches=0.02)
+    # matplot2tikz.save("Results/rmse_vs_nMics.tex",  strict=True, standalone=True)
     plt.show()
 
 
@@ -92,6 +92,7 @@ def plot_missed_vs_nodes_multi_sources(df, fixed_sources=(3, 4, 5)):
     ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     plt.tight_layout()
     plt.savefig("Results/missed_vs_nMics.pdf",  bbox_inches="tight", pad_inches=0.02)
+    # matplot2tikz.save("Results/missed_vs_nMics.tex",  strict=True, standalone=True)
     plt.show()
 
 
