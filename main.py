@@ -41,7 +41,7 @@ from metrics import compute_position_errors
 
 def main(args):
     t0 = time.time()
-    np.random.seed(1234) # 2 is interesting
+    np.random.seed(args.seed) # 2 is interesting
 
     # -----------------------------
     # High-level flags / settings
@@ -65,6 +65,7 @@ def main(args):
         noisePower=args.noisePower,
         sourcePower=args.sourcePower,
     )
+
 
     # -----------------------------
     # Plot reference spectrogram
@@ -127,8 +128,8 @@ def main(args):
     # -----------------------------
     # STFT parameters
     # -----------------------------
-    # frameSize = max(maxTDOA * 2, avgTDOA * 4)
-    frameSize = maxTDOA * 2
+    frameSize = max(maxTDOA * 2, avgTDOA * 4)
+    # frameSize = maxTDOA * 2
     timeOverlap = frameSize // 2
     nfft = frameSize
     hop = frameSize - timeOverlap
@@ -470,7 +471,7 @@ if __name__ == "__main__":
     # Simulation
     parser.add_argument("--nMics", type=int, default=4)
     parser.add_argument("--environmentSize", type=float, default=30.0)
-    parser.add_argument("--nSources", type=int, default=4)
+    parser.add_argument("--nSources", type=int, default=6)
     parser.add_argument("--noisePower", type=float, default=40.0)
     parser.add_argument("--sourcePower", type=float, default=80.0)
     parser.add_argument("--seed", type=int, default=42)

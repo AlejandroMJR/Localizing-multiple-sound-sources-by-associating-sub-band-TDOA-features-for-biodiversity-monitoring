@@ -62,22 +62,23 @@ def main(args):
     # ---------------------------
     # Load data (Use this as example)
     # ---------------------------
-    aud26, fs = librosa.load("/Users/alejandro/Documents/PhD/Data/VizinaGPSDataFirstTest/Vizina_rec/AUD26/245AAA0563FBE586_20260311_073500_SYNC.WAV", sr=None)
+    fs = 32000
+    aud26, _ = librosa.load("/Users/alejandro/Documents/PhD/Data/VizinaGPSDataFirstTest/Vizina_rec/AUD26/245AAA0563FBE586_20260311_073500_SYNC.WAV", sr=fs)
     aud27, _ = librosa.load("/Users/alejandro/Documents/PhD/Data/VizinaGPSDataFirstTest/Vizina_rec/AUD27/249C6006641FC215_20260311_073500_SYNC.WAV", sr=fs)
     aud28, _ = librosa.load("/Users/alejandro/Documents/PhD/Data/VizinaGPSDataFirstTest/Vizina_rec/AUD28/2453AC0564201551_20260311_073500_SYNC.WAV", sr=fs)
     aud29, _ = librosa.load("/Users/alejandro/Documents/PhD/Data/VizinaGPSDataFirstTest/Vizina_rec/AUD29/24E1440163FBE4DB_20260311_073500_SYNC.WAV", sr=fs)
     aud30, _ = librosa.load("/Users/alejandro/Documents/PhD/Data/VizinaGPSDataFirstTest/Vizina_rec/AUD30/245AAA0563FBE51D_20260311_073500_SYNC.WAV", sr=fs)
-    signals = np.stack([aud26, aud27, aud28, aud29, aud30], axis=0)
-    start = 100000  
+    signals = np.stack([aud27, aud29], axis=0)
+    start = 5260000
     dur = int(args.historyTime * fs)
     signals = signals[:, start:start + dur]
 
     coords_gps = np.array([
-        [49.8399506, 14.0997564],
+        # [49.8399506, 14.0997564],
         [49.8396086, 14.0996661],
-        [49.8392744, 14.1002700],
+        # [49.8392744, 14.1002700],
         [49.8395239, 14.0991978],
-        [49.8392422, 14.0991011]
+        # [49.8392422, 14.0991011]
     ])    
     micPos = gps_to_local(coords_gps)
     ## Excess area to localize sources
@@ -209,18 +210,18 @@ def main(args):
         axis=1,
     )
 
-    # valid_mask = build_pair_band_reliability_mask(
-    #     signalsSTFT,
-    #     W,
-    #     iu,
-    #     ju,
-    #     pair_mode="min",
-    #     energy_threshold_mode="percentile",
-    #     energy_percentile=20.0,
-    #     coherence_threshold_mode="percentile",
-    #     coherence_percentile=20.0,
-    #     combine_mode="and",
-    # )
+    valid_mask = build_pair_band_reliability_mask(
+        signalsSTFT,
+        W,
+        iu,
+        ju,
+        pair_mode="min",
+        energy_threshold_mode="percentile",
+        energy_percentile=20.0,
+        coherence_threshold_mode="percentile",
+        coherence_percentile=20.0,
+        combine_mode="and",
+    )
 
     # -----------------------------
     # Matching pursuit parameters (in samples)
@@ -244,7 +245,7 @@ def main(args):
         frameSize=frameSize,
         hop=hop,
         B=B,
-        # valid_mask=valid_mask,
+        valid_mask=valid_mask,
         taper_hz=0.0,
         normalize=True,
         abs_val=True,
@@ -516,16 +517,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="TDOA pipeline (GCC + MP + feature association)")
 
     # Simulation
-    parser.add_argument("--nSources", type=int, default=4)
+    parser.add_argument("--nSources", type=int, default=None)
 
     # Sub-band / history
     parser.add_argument("--Omega_size", type=int, default=500)         # Hz
-    parser.add_argument("--historyTime", type=float, default=3.0)      # seconds
+    parser.add_argument("--historyTime", type=float, default=60.0)      # seconds
     parser.add_argument("--k_neighbors", type=int, default=3)
 
     # Association
     parser.add_argument("--cosine_thresh", type=float, default=0.7)
-    parser.add_argument("--min_tdoas_per_source", type=int, default=3)
+    parser.add_argument("--min_tdoas_per_source", type=int, default=1)
 
     # Plotting / output
     parser.add_argument("--clean_figures", type=int, default=1)

@@ -198,6 +198,7 @@ def plot_room(micPos, srcPos, roomDims, ax=None,
     return ax
 
 
+
 def plot_tdoa_hyperbola(m0, m1, tdoa,
                         fs=None, c=343.0,
                         xlim=(0, 1), ylim=(0, 1),
@@ -472,13 +473,15 @@ def plot_truth_vs_estimates(micPos, srcPos, estPos, roomDims, ax=None):
     Plot microphones, true sources, and estimated sources.
     """
     micPos = np.asarray(micPos, float)
-    srcPos = np.asarray(srcPos, float)
     estPos = np.asarray(estPos, float)
 
     if ax is None:
         _, ax = plt.subplots(figsize=(8, 8))
 
-    plot_room(micPos, srcPos, roomDims, ax=ax)
+    if srcPos is None:
+        plot_room(micPos, np.zeros((0, 2)), roomDims, ax=ax)
+    else:
+        plot_room(micPos, srcPos, roomDims, ax=ax)
 
     if estPos.size > 0:
         colors = plt.cm.tab10(np.linspace(0, 1, len(estPos)))
@@ -908,4 +911,19 @@ def build_source_tf_maps(
         source_maps.append(tf_map)
 
     return source_maps
+
+def gps_to_local(coords):
+    lat0 = coords[:,0].mean()
+    lon0 = coords[:,1].mean()
+
+    R = 6371000
+    lat = np.deg2rad(coords[:,0])
+    lon = np.deg2rad(coords[:,1])
+    lat0 = np.deg2rad(lat0)
+    lon0 = np.deg2rad(lon0)
+
+    x = (lon - lon0) * np.cos(lat0) * R
+    y = (lat - lat0) * R
+
+    return np.c_[x, y]
 

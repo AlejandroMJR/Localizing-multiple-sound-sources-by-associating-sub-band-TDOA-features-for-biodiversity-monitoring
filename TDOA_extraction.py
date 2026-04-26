@@ -513,3 +513,549 @@ def extract_subband_tdoas_gccpairs(
         lags_last = np.arange(-maxTDOA, maxTDOA, dtype=int)
 
     return obs_tau, obs_band, obs_frame, lags_last
+
+def extract_subband_tdoas_windowed_search(
+    signals,
+    fs,
+    band_ranges_hz,
+    iu,
+    ju,
+    pair_max_tdoa,
+    frameSize,
+    hop,
+    *,
+    B=None,
+    valid_mask=None,   # (P, BANDS, T)
+    taper_hz=0.0,
+    normalize=True,
+    abs_val=True,
+    global_max_tdoa=None,
+):
+    """
+    Extract local TDOA observations using:
+      - short analysis window on mic i
+      - larger lag-search interval on mic j
+
+    This decouples frameSize from the maximum pair delay.
+
+    Parameters
+    ----------
+    signals : (M, N) ndarray
+        Time-domain microphone signals.
+    fs : float
+    band_ranges_hz : list[(f_lo, f_hi)]
+        Frequency ranges for each sub-band.
+    iu, ju : (P,) int arrays
+        Pair indices.
+    pair_max_tdoa : (P,) int array
+        Pair-dependent maximum feasible lag in samples.
+    frameSize : int
+        Short analysis window size.
+    hop : int
+        Hop size between frames.
+    B : int or None
+        Number of frames to use.
+    valid_mask : (P, n_bands, T) bool ndarray or None
+        Optional mask to skip low-energy zones.
+    taper_hz : float
+        Optional taper width when building full-signal band masks.
+    normalize : bool
+        Use normalized cross-correlation.
+    abs_val : bool
+        Take absolute value before argmax.
+    global_max_tdoa : int or None
+        Global lag axis returned for downstream histogram code.
+
+    Returns
+    -------
+    obs_tau : list of length P
+    obs_band : list of length P
+    obs_frame : list of length P
+    lags : ndarray
+        Global lag axis for downstream use.
+    """
+    signals = np.asarray(signals, dtype=np.float32)
+    iu = np.asarray(iu, dtype=int)
+    ju = np.asarray(ju, dtype=int)
+    pair_max_tdoa = np.asarray(pair_max_tdoa, dtype=int)
+
+    if signals.ndim != 2:
+        raise ValueError("signals must have shape (M, N)")
+    if iu.shape != ju.shape:
+        raise ValueError("iu and ju must have the same shape")
+    if pair_max_tdoa.shape[0] != iu.shape[0]:
+        raise ValueError("pair_max_tdoa must have one entry per pair")
+
+    M, N = signals.shape
+    P = iu.size
+    n_bands = len(band_ranges_hz)
+
+    if N < frameSize:
+        raise ValueError("frameSize is longer than the signals")
+
+    n_frames_total = 1 + (N - frameSize) // hop
+    T_use = n_frames_total if B is None else min(int(B), n_frames_total)
+
+    if global_max_tdoa is None:
+        global_max_tdoa = int(np.max(pair_max_tdoa))
+
+    obs_tau = [[] for _ in range(P)]
+    obs_band = [[] for _ in range(P)]
+    obs_frame = [[] for _ in range(P)]
+
+    # Full-signal FFT once
+    X_full = np.fft.rfft(signals, axis=1)
+    freqs_full = np.fft.rfftfreq(N, d=1.0 / fs)
+
+    win = np.hanning(frameSize).astype(np.float32)
+
+    for b, (f_lo, f_hi) in enumerate(band_ranges_hz):
+        mask = build_fullband_rfft_mask(freqs_full, f_lo, f_hi, taper_hz=taper_hz)
+        if not np.any(mask > 0):
+            continue
+
+        Xb = X_full * mask[None, :]
+        xb = np.fft.irfft(Xb, n=N, axis=1).astype(np.float32)
+
+        for t in range(T_use):
+            s = t * hop
+            e = s + frameSize
+
+            if valid_mask is None:
+                active_idx = np.arange(P, dtype=int)
+            else:
+                active_idx = np.where(valid_mask[:, b, t])[0]
+
+            if active_idx.size == 0:
+                continue
+
+            for p in active_idx:
+                i = int(iu[p])
+                j = int(ju[p])
+                maxlag = int(pair_max_tdoa[p])
+
+                x_ref = xb[i, s:e]
+
+                search_start = max(0, s - maxlag)
+                search_end = min(N, e + maxlag)
+                y_search = xb[j, search_start:search_end]
+
+                lag_min = search_start - s
+
+                # scores, lags_local = _xcorr_curve_short_in_long(
+                #     x_ref,
+                #     y_searc3h,
+                #     lag_min=lag_min,
+                #     window=win,
+                #     normalize=normalize,
+                #     abs_val=abs_val,
+                # )
+                scores, lags_local = fast_xcorr_short_in_long(
+                    x_ref,
+                    y_search,
+                    lag_min=lag_min,
+                    maxlag=maxlag,
+                )
+
+                if scores.size == 0:
+                    continue
+
+                k = int(np.argmax(np.abs(scores)))
+                tau_hat = -int(lags_local[k])
+
+                obs_tau[p].append(tau_hat)
+                obs_band[p].append(int(b))
+                obs_frame[p].append(int(t))
+
+    lags = np.arange(-global_max_tdoa, global_max_tdoa + 1, dtype=int)
+    return obs_tau, obs_band, obs_frame, lags
+
+def fast_xcorr_short_in_long(x_ref, y_search, lag_min, maxlag, eps=1e-12):
+    """
+    Correlate short x_ref against all valid length-L windows inside y_search.
+
+    Returns scores indexed by lag where lag means:
+        lag = (start index of y window) - (start index of x window)
+
+    IMPORTANT:
+    This raw lag has the opposite sign of your pipeline convention
+    tau_ij = tof_i - tof_j, so the caller should negate it.
+    """
+    x_ref = np.asarray(x_ref, dtype=np.float32)
+    y_search = np.asarray(y_search, dtype=np.float32)
+
+    L = len(x_ref)
+    M = len(y_search)
+
+    if M < L:
+        return np.zeros(0, dtype=np.float32), np.zeros(0, dtype=int)
+
+    # Reverse x so convolution gives sliding correlation
+    xr = x_ref[::-1]
+
+    nfft = 1
+    while nfft < M + L - 1:
+        nfft *= 2
+
+    X = np.fft.rfft(xr, n=nfft)
+    Y = np.fft.rfft(y_search, n=nfft)
+    conv = np.fft.irfft(X * Y, n=nfft)
+
+    # Valid windows: y[k:k+L], k = 0 ... M-L
+    scores = conv[L-1 : L-1 + (M - L + 1)]
+
+    lags = lag_min + np.arange(M - L + 1, dtype=int)
+
+    valid = (lags >= -maxlag) & (lags <= maxlag)
+    return scores[valid].astype(np.float32), lags[valid]
+
+def build_fullband_rfft_mask(freqs_full, f_lo, f_hi, taper_hz=0.0):
+    """
+    Build a real-valued band mask on a full-signal rFFT frequency axis.
+    """
+    mask = np.zeros_like(freqs_full, dtype=np.float32)
+
+    if f_hi <= f_lo:
+        return mask
+
+    if taper_hz <= 0:
+        mask[(freqs_full >= f_lo) & (freqs_full <= f_hi)] = 1.0
+        return mask
+
+    # Cosine ramps
+    left0 = max(0.0, f_lo - taper_hz)
+    left1 = f_lo
+    right0 = f_hi
+    right1 = f_hi + taper_hz
+
+    passband = (freqs_full >= left1) & (freqs_full <= right0)
+    mask[passband] = 1.0
+
+    left = (freqs_full >= left0) & (freqs_full < left1)
+    if np.any(left):
+        x = (freqs_full[left] - left0) / max(left1 - left0, 1e-12)
+        mask[left] = 0.5 - 0.5 * np.cos(np.pi * x)
+
+    right = (freqs_full > right0) & (freqs_full <= right1)
+    if np.any(right):
+        x = (freqs_full[right] - right0) / max(right1 - right0, 1e-12)
+        mask[right] = 0.5 + 0.5 * np.cos(np.pi * x)
+
+    return mask
+
+
+def omega_list_to_hz_ranges(Omega_list, fs, nfft):
+    """
+    Convert Omega_list (FFT-bin bands) into frequency ranges in Hz.
+
+    Returns
+    -------
+    band_ranges_hz : list of tuples
+        [(f_lo, f_hi), ...] for each band.
+    """
+    freqs = np.arange(nfft // 2 + 1) * (fs / float(nfft))
+    band_ranges_hz = []
+
+    for Omega_idx in Omega_list:
+        Omega_idx = np.asarray(Omega_idx, dtype=int)
+        if Omega_idx.size == 0:
+            band_ranges_hz.append((0.0, 0.0))
+            continue
+        f_lo = float(freqs[Omega_idx.min()])
+        f_hi = float(freqs[Omega_idx.max()])
+        band_ranges_hz.append((f_lo, f_hi))
+
+    return band_ranges_hz
+
+def build_pair_band_reliability_mask(
+    signalsSTFT,
+    W,
+    iu,
+    ju,
+    *,
+    pair_mode="min",
+    energy_threshold_mode="percentile",
+    energy_percentile=50.0,
+    energy_rel_factor=1.5,
+    coherence_threshold_mode="percentile",
+    coherence_percentile=50.0,
+    coherence_rel_factor=1.0,
+    combine_mode="and",
+    score_alpha=0.5,
+    eps=1e-12,
+    return_scores=False,
+):
+    """
+    Build a boolean mask indicating which (pair, band, frame) zones are reliable
+    for TDOA extraction, using two cheap cues:
+
+      1) pair-band energy
+      2) pair-band normalized coherence
+
+    This is intended as a low-cost replacement for a pure energy mask.
+
+    Parameters
+    ----------
+    signalsSTFT : (M, F, T) complex ndarray
+        STFT of microphone signals.
+    W : (B, F) real ndarray
+        Frequency-band weights/masks.
+    iu, ju : (P,) int ndarray
+        Pair index arrays. Pair p is (iu[p], ju[p]).
+    pair_mode : {"min", "geom_mean", "mean"}
+        How to combine the two microphone energies of a pair:
+          - "min"       : conservative, requires both mics to have energy
+          - "geom_mean" : softer than min
+          - "mean"      : least conservative
+    energy_threshold_mode : {"percentile", "median_rel"}
+        Thresholding mode for pair energy across time, separately for each (pair, band).
+    energy_percentile : float
+        Percentile used if energy_threshold_mode="percentile".
+    energy_rel_factor : float
+        Factor used if energy_threshold_mode="median_rel".
+    coherence_threshold_mode : {"percentile", "median_rel"}
+        Thresholding mode for pair coherence across time, separately for each (pair, band).
+    coherence_percentile : float
+        Percentile used if coherence_threshold_mode="percentile".
+    coherence_rel_factor : float
+        Factor used if coherence_threshold_mode="median_rel".
+    combine_mode : {"and", "score"}
+        How to combine energy and coherence:
+          - "and"   : both masks must be true
+          - "score" : threshold a normalized weighted score
+    score_alpha : float
+        Weight for normalized energy in score mode:
+            score = score_alpha * E_norm + (1 - score_alpha) * C_norm
+    eps : float
+        Small constant for numerical stability.
+    return_scores : bool
+        If True, also return intermediate energies, coherences, thresholds, and masks.
+
+    Returns
+    -------
+    valid_mask : (P, B, T) bool ndarray
+        True where the zone is reliable enough.
+    band_energy_mic : (M, B, T) ndarray, optional
+    pair_energy : (P, B, T) ndarray, optional
+    pair_coherence : (P, B, T) ndarray, optional
+    energy_thresholds : (P, B) ndarray, optional
+    coherence_thresholds : (P, B) ndarray, optional
+    energy_mask : (P, B, T) bool ndarray, optional
+    coherence_mask : (P, B, T) bool ndarray, optional
+    score : (P, B, T) ndarray, optional
+    """
+    signalsSTFT = np.asarray(signalsSTFT)
+    W = np.asarray(W, dtype=float)
+    iu = np.asarray(iu, dtype=int)
+    ju = np.asarray(ju, dtype=int)
+
+    if signalsSTFT.ndim != 3:
+        raise ValueError("signalsSTFT must have shape (M, F, T)")
+    if W.ndim != 2:
+        raise ValueError("W must have shape (B, F)")
+    if signalsSTFT.shape[1] != W.shape[1]:
+        raise ValueError("signalsSTFT and W must have the same frequency dimension")
+    if iu.shape != ju.shape:
+        raise ValueError("iu and ju must have the same shape")
+
+    # Frequency-local microphone power: (M, F, T)
+    mag2 = np.abs(signalsSTFT) ** 2
+
+    # Band energy per microphone: (M, B, T)
+    band_energy_mic = np.einsum("bf,mft->mbt", W, mag2, optimize=True)
+
+    # Pair-band energy: (P, B, T)
+    Ei = band_energy_mic[iu]
+    Ej = band_energy_mic[ju]
+
+    if pair_mode == "min":
+        pair_energy = np.minimum(Ei, Ej)
+    elif pair_mode == "geom_mean":
+        pair_energy = np.sqrt(np.maximum(Ei * Ej, 0.0))
+    elif pair_mode == "mean":
+        pair_energy = 0.5 * (Ei + Ej)
+    else:
+        raise ValueError(f"Unknown pair_mode: {pair_mode}")
+
+    # Pair-band normalized coherence, aggregated over each band:
+    #   |sum_f W X_i X_j*|^2 / [(sum_f W |X_i|^2)(sum_f W |X_j|^2)]
+    Xi = signalsSTFT[iu]                      # (P, F, T)
+    Xj = signalsSTFT[ju]                      # (P, F, T)
+    cross = Xi * np.conj(Xj)                  # (P, F, T)
+    cross_band = np.einsum("bf,pft->pbt", W, cross, optimize=True)
+    pair_coherence = (np.abs(cross_band) ** 2) / np.maximum(Ei * Ej, eps)
+    pair_coherence = np.clip(pair_coherence, 0.0, 1.0)
+
+    def _threshold_over_time(x, mode, percentile_value, rel_factor_value):
+        if mode == "percentile":
+            return np.percentile(x, percentile_value, axis=2)
+        elif mode == "median_rel":
+            return rel_factor_value * np.median(x, axis=2)
+        else:
+            raise ValueError(f"Unknown threshold mode: {mode}")
+
+    energy_thresholds = _threshold_over_time(
+        pair_energy,
+        energy_threshold_mode,
+        energy_percentile,
+        energy_rel_factor,
+    )
+    coherence_thresholds = _threshold_over_time(
+        pair_coherence,
+        coherence_threshold_mode,
+        coherence_percentile,
+        coherence_rel_factor,
+    )
+
+    energy_mask = pair_energy >= (energy_thresholds[:, :, None] + eps)
+    coherence_mask = pair_coherence >= (coherence_thresholds[:, :, None] + eps)
+
+    combine_mode = combine_mode.lower()
+    if combine_mode == "and":
+        valid_mask = energy_mask & coherence_mask
+        score = None
+    elif combine_mode == "score":
+        energy_norm = pair_energy / np.maximum(energy_thresholds[:, :, None], eps)
+        coherence_norm = pair_coherence / np.maximum(coherence_thresholds[:, :, None], eps)
+        score = score_alpha * energy_norm + (1.0 - score_alpha) * coherence_norm
+        valid_mask = score >= 1.0
+    else:
+        raise ValueError(f"Unknown combine_mode: {combine_mode}")
+
+    if return_scores:
+        return (
+            valid_mask,
+            band_energy_mic,
+            pair_energy,
+            pair_coherence,
+            energy_thresholds,
+            coherence_thresholds,
+            energy_mask,
+            coherence_mask,
+            score,
+        )
+
+    return valid_mask
+
+def matching_pursuit_tdoa(
+    y,                  # length-L TDOA histogram (smoothed), nonnegative
+    L,                  # number of bins (len(y))
+    QN, QW,             # odd widths (in bins) for narrow & wide atoms
+    t_min, t_max,       # TDOA range covered by the histogram
+    verbose=False
+):
+    """
+    Matching pursuit on a linear TDOA histogram over [t_min, t_max], using the
+    same atom construction, candidate selection, and residual update logic as
+    `matching_pursuit_tdoa_maxSources`, but with an automatic stopping rule.
+
+    Parameters
+    ----------
+    y : array-like, shape (L,)
+        Smoothed TDOA histogram.
+    L : int
+        Number of bins.
+    QN, QW : int
+        Atom widths (in bins) for narrow and wide atoms.
+    u_min : float
+        Kept only for API compatibility.
+        It is not used in this function.
+    t_min, t_max : float
+        Min and max TDOA values represented by the histogram.
+    verbose : bool
+        Print debug info.
+
+    Returns
+    -------
+    tdoas_hat : (P,) ndarray
+        Estimated TDOA peaks (same units as t_min/t_max).
+    betas : (P,) ndarray
+        MP coefficients for each detected peak.
+    residual : (L,) ndarray
+        Final residual histogram.
+    debug : dict or None
+        Internal traces if verbose, else None.
+    """
+    y = np.asarray(y, dtype=float).copy()
+    if y.ndim != 1 or len(y) != L:
+        raise ValueError("y must be 1D of length L")
+
+    # y, _ = remove_baseline(y, sigma_base=10*QW)
+
+    cN = _blackman_atom(L, QN)
+    cW = _blackman_atom(L, QW)
+    E_CN = _energy(cN)
+
+    span = float(t_max - t_min)
+
+    tdoas_hat, betas = [], []
+    residual = y.copy()
+
+    traces = {"a_list": [], "i_star": [], "beta": [], "y_snapshots": [residual.copy()]}
+
+    def rms(x):
+        x = np.asarray(x, dtype=float)
+        if x.size == 0:
+            return 0.0
+        return float(np.sqrt(np.mean(np.square(x)) + 1e-12))
+
+    j = 1
+    a1_max = None
+    while True:
+        # Same correlation logic as matching_pursuit_tdoa_maxSources
+        pad = int(QW)
+        res_padded = np.pad(residual, pad, mode="reflect")
+        a_full = np.correlate(res_padded, cN, mode="same")
+        a = a_full[pad:pad + L]
+        traces["a_list"].append(a.copy())
+
+        if not np.any(np.isfinite(a)):
+            break
+
+        i_star = int(np.argmax(a))
+        traces["i_star"].append(i_star)
+
+        tdoa_hat = t_min + i_star * span / L
+        beta_j = float(a[i_star] / (E_CN + 1e-12))
+        traces["beta"].append(beta_j)
+
+        if verbose:
+            print(f"[j={j}] i*={i_star}, TDOA={tdoa_hat:.6f}, a[i*]={a[i_star]:.4f}, beta={beta_j:.4f}")
+
+        # Automatic stopping rule: compare local peak RMS against residual background.
+        half_w = max(1, QW // 2)
+        p0 = max(0, i_star - half_w)
+        p1 = min(L, i_star + half_w + 1)
+
+        peak_vals = residual[p0:p1]
+
+        noise_mask = np.ones(L, dtype=bool)
+        noise_mask[p0:p1] = False
+        noise_vals = residual[noise_mask]
+
+        peak_rms = rms(peak_vals)
+        noise_rms = rms(noise_vals) if noise_vals.size > 0 else 1e-12
+        snr_rms = peak_rms / (noise_rms + 1e-12)
+
+        if verbose:
+            print(f"  peak_rms={peak_rms:.4g}, noise_rms={noise_rms:.4g}, ratio={snr_rms:.2f}")
+
+        if j == 1:
+            a1_max = a[i_star]
+
+        if snr_rms < 3.0 and a[i_star] / (a1_max + 1e-12) < 0.2:
+            break
+        # if a[i_star] / (a1_max + 1e-12) < 0.2:
+        #     break
+        # Same residual update logic as matching_pursuit_tdoa_maxSources
+        cW_shift = _shift_atom_linear(cW, i_star - L // 2)
+        residual = np.maximum(residual - cW_shift, 0.0)
+
+        traces["y_snapshots"].append(residual.copy())
+
+        tdoas_hat.append(tdoa_hat)
+        betas.append(beta_j)
+        j += 1
+
+    debug = traces if verbose else None
+    return np.asarray(tdoas_hat), np.asarray(betas), residual, debug

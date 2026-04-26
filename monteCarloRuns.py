@@ -379,13 +379,13 @@ if __name__ == "__main__":
     sourcePowers = [80]
 
     df_results = run_sweep(
-        n_runs=50,
+        n_runs=20,
         nMics=nMics,
         nSources=nSources,
         environmentSizes=environmentSizes,
         noisePowers=noisePowers,
         sourcePowers=sourcePowers,
-        out_csv="monte_carlo_results.csv",
+        out_csv="monte_carlo_results_new.csv",
         base_seed=123,
     )
 

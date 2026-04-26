@@ -69,7 +69,7 @@ def _simulate(
     selected_idx = np.random.choice(len(allSources), nSources, replace=False)
     sources = allSources[selected_idx].copy()
 
-    # Normalize each source (peak)
+    # Normalize each source (peak) Same SPL before scaling to target SPL
     for i in range(nSources):
         s = sources[i]
         s = s / (np.max(np.abs(s)) + 1e-12)
