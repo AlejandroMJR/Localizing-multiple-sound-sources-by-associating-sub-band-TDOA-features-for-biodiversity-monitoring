@@ -471,7 +471,7 @@ if __name__ == "__main__":
     # Simulation
     parser.add_argument("--nMics", type=int, default=4)
     parser.add_argument("--environmentSize", type=float, default=30.0)
-    parser.add_argument("--nSources", type=int, default=6)
+    parser.add_argument("--nSources", type=int, default=4)
     parser.add_argument("--noisePower", type=float, default=40.0)
     parser.add_argument("--sourcePower", type=float, default=80.0)
     parser.add_argument("--seed", type=int, default=42)
