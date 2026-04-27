@@ -58,13 +58,30 @@ def main(args):
     # -----------------------------
     # Simulate
     # -----------------------------
-    fs, micPos, signals, srcPos = _simulate(
-        nMics=args.nMics,
-        environmentSize=args.environmentSize,
-        nSources=args.nSources,
-        noisePower=args.noisePower,
-        sourcePower=args.sourcePower,
-    )
+    # fs, micPos, signals, srcPos = _simulate(
+    #     nMics=args.nMics,
+    #     environmentSize=args.environmentSize,
+    #     nSources=args.nSources,
+    #     noisePower=args.noisePower,
+    #     sourcePower=args.sourcePower,
+    # )
+    import librosa as lb
+    from pathlib import Path
+    parent_dir = '/media/siriussound/Extreme SSD/Recordings/MyRecordings/20250701_AudioMothDevBoards'
+    find_bb4 = '243B1F08641FDBB4_20250605_070000.WAV'
+    find_d2c = '24E1440163FBED2C_20250605_090000.WAV'
+    file_bb4 = list(Path(parent_dir).rglob(find_bb4))[0]
+    file_d2c = list(Path(parent_dir).rglob(find_d2c))[0]
+    audio_bb4, fs = lb.load(file_bb4, sr=None)
+    audio_d2c, _ = lb.load(file_d2c, sr=None)
+    signals = np.stack([audio_bb4, audio_d2c])
+    
+    # micPos = np.array([[52.15664027,  4.48260264], [52.1569793,  4.4823314]]) # distance according to GPS log from AudioMoth DevBoards
+    srcPos = np.array([[52.15664027,  4.48260264], [52.1569793,  4.4823314]]) # why do I need to specify this?
+    
+    
+    micPos = np.array([[52.15685, 4.482944], [52.15666, 4.483084]]) # distance according to google maps
+    
 
 
     # -----------------------------
